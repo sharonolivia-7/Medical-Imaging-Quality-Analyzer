@@ -1,0 +1,62 @@
+# Python virtual environments and caches
+**/.venv/
+**/venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Temporary and operating-system files
+*.tmp
+*.temp
+*.bak
+*.orig
+*.log
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+~$*
+
+# Local environment files and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+private/
+patient_data/
+**/patient_data/
+
+# Test, lint, and build artifacts
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Only the reviewed synthetic sample image and its note are allowed in data/.
+data/*
+!data/sample/
+data/sample/*
+!data/sample/README.md
+!data/sample/sample.png
+
+# Generated reports should not be committed.
+reports/*
+!reports/.gitkeep
+
+# Medical image formats may contain patient-identifying metadata.
+*.dcm
+*.dicom
+*.ima
+*.nii
+*.nii.gz
+*.mha
+*.mhd
+*.nrrd

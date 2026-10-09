@@ -18,8 +18,8 @@ information, even if you believe it has been de-identified.
 - Load regular image files as grayscale and calculate dimensions, minimum and
   maximum pixel values, mean intensity, and standard deviation.
 - Display a grayscale image beside its pixel-intensity histogram when requested.
-- Calculate an educational estimated SNR as mean intensity divided by population
-  standard deviation.
+- Calculate an educational estimated SNR as positive mean intensity divided by
+  population standard deviation when that mean is a meaningful signal reference.
 - Apply a Gaussian filter to smooth nearby pixel variations.
 - Calculate a 2D FFT and centered log-magnitude frequency spectrum.
 - Run a MATLAB example for grayscale statistics, FFT visualization, and
@@ -27,6 +27,8 @@ information, even if you believe it has been de-identified.
 - Run basic quality checks with caller-configurable thresholds.
 - Read single-frame grayscale DICOM pixel data, apply rescale slope/intercept,
   and calculate basic measurements without returning identifying metadata.
+- Flag potentially sensitive DICOM metadata field names and private-tag presence
+  without reading or disclosing their values in CLI output or reports.
 - Generate text reports without including arbitrary metadata fields.
 
 The DICOM reader returns decoded single-frame grayscale pixel data with
@@ -70,25 +72,48 @@ Optional image display and Gaussian filtering:
 ```
 
 `--show` opens a Matplotlib window and is optional; normal runs and automated
-tests do not require a graphical display. Use `--report reports\my_report.txt`
+tests do not require a graphical display. It works with PNG and grayscale DICOM
+images. DICOM visualization uses the decoded, rescaled pixel array and respects
+`MONOCHROME1` grayscale inversion. Use `--report reports\my_report.txt`
 to choose a report path; an existing report file is never overwritten.
+Add `--frequency` to calculate the centered FFT and log-magnitude spectrum.
+The report records only the spectrum dimensions, not the full arrays.
 
 The DICOM reader supports single-frame grayscale images. It decodes pixel data,
 applies rescale slope and intercept to a floating-point array, then calculates
 statistics, SNR, quality checks, and reports without including patient metadata.
-Run it like this:
+It also flags known potentially identifying field names and the presence of
+private tags; it never returns or prints their values. Run it like this:
 
 ```powershell
-& .\.venv\Scripts\python.exe -m medical_imaging_quality_analyzer path\to\sample.dcm --dicom
+& .\.venv\Scripts\python.exe -m medical_imaging_quality_analyzer data\sample\CT_small.dcm --frequency
 ```
 
-DICOM mode can also apply the existing Gaussian filter with `--filter`. The
-current visualizer accepts regular image-file paths, so `--show` is not
-supported with DICOM input. Missing pixel data, color images, multi-frame data,
-or unsupported/corrupt pixel encodings produce a clear error. DICOM pixel values
-remain unchanged in the source file; rescaling is applied only to the array used
-for analysis. All output is educational and is not clinically validated or
-intended for diagnosis.
+To display a DICOM image in a Matplotlib window, add `--show`:
+
+```powershell
+& .\.venv\Scripts\python.exe -m medical_imaging_quality_analyzer data\sample\CT_small.dcm --show
+```
+
+DICOM files ending in `.dcm` are detected automatically; use `--dicom` to force
+DICOM reading for files with another extension. DICOM mode can also apply the
+existing Gaussian filter with `--filter`. The current visualizer accepts regular
+image-file paths; DICOM display uses the decoded pixel array directly. Missing
+pixel data, invalid dimensions, color images, multi-frame data, or
+unsupported/corrupt pixel encodings produce a clear error.
+DICOM pixel values remain unchanged in the source file; rescaling is applied
+only to the array used for analysis. The included public sample may contain
+potentially identifying metadata: use it only to exercise the privacy checks,
+and do not print or copy its metadata values. All output is educational and is
+not clinically validated or intended for diagnosis.
+
+The simple SNR estimate is `mean intensity / population standard deviation` and
+is reported only when the mean intensity is positive. Signed scales such as CT
+values may have a negative mean; in that case the estimate is shown as
+unavailable instead of a negative SNR. Also, whole-image standard deviation
+contains both image structure and noise, so this ratio is not a physical or
+clinically validated SNR measurement. A meaningful SNR requires a defined
+signal reference and a suitable noise measurement.
 
 To see every available option:
 
@@ -105,8 +130,9 @@ $env:PYTHONPATH = "src"
 & .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-The tests generate temporary synthetic images and DICOM files; they do not need
-real patient data or a graphical display.
+The tests generate temporary synthetic images and DICOM files and, when present,
+also verify the optional `data\sample\CT_small.dcm` fixture. No graphical display
+is required. The DICOM fixture is not needed for the synthetic tests.
 
 ## Frequency-analysis example
 

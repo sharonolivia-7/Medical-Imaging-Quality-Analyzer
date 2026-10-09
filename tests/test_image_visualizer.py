@@ -9,9 +9,13 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+import numpy as np
 from PIL import Image
 
-from medical_imaging_quality_analyzer.image_visualizer import visualize_image
+from medical_imaging_quality_analyzer.image_visualizer import (
+    visualize_image,
+    visualize_image_array,
+)
 
 
 class VisualizeImageTests(unittest.TestCase):
@@ -49,6 +53,38 @@ class VisualizeImageTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "Could not open image"):
                 visualize_image(missing_path)
+
+    def test_displays_signed_array_using_its_values_and_normal_grayscale(self):
+        sample_image = np.array([[-100.0, 0.0], [50.0, 100.0]])
+
+        with patch("matplotlib.pyplot.show"):
+            visualize_image_array(sample_image)
+
+        figure = plt.gcf()
+        displayed = figure.axes[0].images[0]
+        np.testing.assert_array_equal(displayed.get_array(), sample_image)
+        self.assertEqual(displayed.get_cmap().name, "gray")
+        self.assertEqual(figure.axes[0].get_title(), "Grayscale Image")
+        self.assertEqual(figure.axes[1].get_title(), "Pixel-Intensity Histogram")
+
+    def test_displays_monochrome1_using_reversed_grayscale(self):
+        sample_image = np.array([[0.0, 100.0]])
+
+        with patch("matplotlib.pyplot.show"):
+            visualize_image_array(
+                sample_image,
+                photometric_interpretation="MONOCHROME1",
+            )
+
+        self.assertEqual(plt.gcf().axes[0].images[0].get_cmap().name, "gray_r")
+
+    def test_array_display_rejects_invalid_inputs(self):
+        with self.assertRaisesRegex(ValueError, "must not be empty"):
+            visualize_image_array(np.empty((0, 0)))
+        with self.assertRaisesRegex(ValueError, "2D grayscale"):
+            visualize_image_array(np.zeros((2, 2, 3)))
+        with self.assertRaisesRegex(ValueError, "finite pixel values"):
+            visualize_image_array(np.array([[np.nan]]))
 
 
 if __name__ == "__main__":

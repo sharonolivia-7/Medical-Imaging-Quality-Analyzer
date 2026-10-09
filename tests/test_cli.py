@@ -19,7 +19,11 @@ class CommandLineIntegrationTests(unittest.TestCase):
         sample_image.putdata([0, 32, 64, 128, 192, 255])
         sample_image.save(path)
 
-    def create_sample_dicom(self, path: Path) -> None:
+    def create_sample_dicom(
+        self,
+        path: Path,
+        photometric_interpretation: str = "MONOCHROME2",
+    ) -> None:
         file_meta = FileMetaDataset()
         file_meta.MediaStorageSOPClassUID = SecondaryCaptureImageStorage
         file_meta.MediaStorageSOPInstanceUID = generate_uid()
@@ -39,7 +43,7 @@ class CommandLineIntegrationTests(unittest.TestCase):
         dataset.PatientName = "SAMPLE^PATIENT"
         dataset.PatientID = "SAMPLE-ID"
         dataset.SamplesPerPixel = 1
-        dataset.PhotometricInterpretation = "MONOCHROME2"
+        dataset.PhotometricInterpretation = photometric_interpretation
         dataset.BitsAllocated = 8
         dataset.BitsStored = 8
         dataset.HighBit = 7
@@ -120,7 +124,7 @@ class CommandLineIntegrationTests(unittest.TestCase):
             folder = Path(temporary_directory)
             dicom_path = folder / "sample.dcm"
             report_path = folder / "analysis.txt"
-            self.create_sample_dicom(dicom_path)
+            self.create_sample_dicom(dicom_path, photometric_interpretation="MONOCHROME1")
             output = io.StringIO()
 
             with contextlib.redirect_stdout(output):
@@ -144,6 +148,94 @@ class CommandLineIntegrationTests(unittest.TestCase):
         self.assertNotIn("SAMPLE-ID", output.getvalue())
         self.assertNotIn("SAMPLE^PATIENT", report_content)
         self.assertNotIn("SAMPLE-ID", report_content)
+        self.assertIn("Potentially sensitive metadata detected: yes", output.getvalue())
+        self.assertIn("Potentially sensitive DICOM metadata was detected", report_content)
+
+    def test_sample_dicom_uses_frequency_qc_and_report_without_exposing_fields(self):
+        sample_path = (
+            Path(__file__).resolve().parents[1]
+            / "data"
+            / "sample"
+            / "CT_small.dcm"
+        )
+        if not sample_path.is_file():
+            self.skipTest("The optional CT_small.dcm sample is not present.")
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_path = Path(temporary_directory) / "dicom_report.txt"
+            output = io.StringIO()
+
+            with contextlib.redirect_stdout(output):
+                result = main(
+                    [
+                        str(sample_path),
+                        "--dicom",
+                        "--frequency",
+                        "--filter",
+                        "--report",
+                        str(report_path),
+                    ]
+                )
+
+            report_content = report_path.read_text(encoding="utf-8")
+            cli_output = output.getvalue()
+
+        self.assertEqual(result, 0)
+        self.assertIn("Centered frequency spectrum calculated", cli_output)
+        self.assertIn("Gaussian filter applied", cli_output)
+        self.assertIn("Frequency spectrum: Calculated (128 x 128 bins)", report_content)
+        self.assertIn("Potentially sensitive DICOM metadata was detected", report_content)
+        self.assertIn(
+            "Estimated SNR: Not available (mean intensity is non-positive)",
+            report_content,
+        )
+        self.assertIn(
+            "Estimated SNR: Not available (mean intensity is non-positive)",
+            cli_output,
+        )
+        self.assertNotIn("PatientName", cli_output + report_content)
+        self.assertNotIn("PatientID", cli_output + report_content)
+
+    def test_dcm_path_automatically_uses_dicom_reader_not_pillow(self):
+        sample_path = (
+            Path(__file__).resolve().parents[1]
+            / "data"
+            / "sample"
+            / "CT_small.dcm"
+        )
+        if not sample_path.is_file():
+            self.skipTest("The optional CT_small.dcm sample is not present.")
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report_path = Path(temporary_directory) / "dicom_report.txt"
+            output = io.StringIO()
+
+            with (
+                patch(
+                    "medical_imaging_quality_analyzer.__main__.Image.open"
+                ) as pillow_open,
+                patch(
+                    "medical_imaging_quality_analyzer.report_generator._default_report_path",
+                    return_value=report_path,
+                ),
+                contextlib.redirect_stdout(output),
+            ):
+                result = main([str(sample_path)])
+
+            report_content = report_path.read_text(encoding="utf-8")
+
+        pillow_open.assert_not_called()
+        self.assertEqual(result, 0)
+        self.assertIn("DICOM image analysis", output.getvalue())
+        self.assertIn("128 x 128 pixels", output.getvalue())
+        self.assertIn("Potentially sensitive metadata detected:", output.getvalue())
+        self.assertIn("Image dimensions: 128 x 128 pixels", report_content)
+        self.assertIn("Frequency spectrum: Not calculated", report_content)
+        self.assertIn(
+            "Estimated SNR: Not available (mean intensity is non-positive)",
+            report_content,
+        )
+        self.assertIn("Potentially sensitive DICOM metadata was detected", report_content)
 
     def test_reports_clear_error_for_missing_image(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -156,13 +248,39 @@ class CommandLineIntegrationTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("Error: Could not load image", output.getvalue())
 
-    def test_dicom_rejects_show_with_clear_error(self):
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            result = main(["sample.dcm", "--dicom", "--show"])
+    def test_show_option_displays_dicom_array(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            dicom_path = Path(temporary_directory) / "sample.dcm"
+            report_path = Path(temporary_directory) / "analysis.txt"
+            self.create_sample_dicom(
+                dicom_path,
+                photometric_interpretation="MONOCHROME1",
+            )
+            output = io.StringIO()
 
-        self.assertEqual(result, 2)
-        self.assertIn("--show currently supports regular image files only", output.getvalue())
+            with (
+                patch(
+                    "medical_imaging_quality_analyzer.__main__.visualize_image_array"
+                ) as show,
+                contextlib.redirect_stdout(output),
+            ):
+                result = main(
+                    [
+                        str(dicom_path),
+                        "--show",
+                        "--report",
+                        str(report_path),
+                    ]
+                )
+
+        self.assertEqual(result, 0)
+        shown_image = show.call_args.args[0]
+        self.assertEqual(shown_image.shape, (2, 3))
+        self.assertEqual(
+            show.call_args.kwargs["photometric_interpretation"],
+            "MONOCHROME1",
+        )
+        self.assertNotIn("SAMPLE^PATIENT", output.getvalue())
 
 
 if __name__ == "__main__":

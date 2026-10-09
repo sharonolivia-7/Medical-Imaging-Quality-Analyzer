@@ -35,6 +35,20 @@ class AnalyzeSignalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "finite pixel values"):
             analyze_signal(sample_image)
 
+    def test_non_positive_mean_does_not_produce_a_negative_snr(self):
+        sample_image = np.array([[-500.0, -100.0], [100.0, 20.0]])
+
+        result = analyze_signal(sample_image)
+
+        self.assertLess(result["mean_intensity"], 0)
+        self.assertIsNone(result["estimated_snr"])
+
+    def test_positive_constant_image_keeps_infinite_estimate(self):
+        result = analyze_signal(np.full((2, 2), 12.0))
+
+        self.assertEqual(result["standard_deviation"], 0)
+        self.assertEqual(result["estimated_snr"], float("inf"))
+
 
 if __name__ == "__main__":
     unittest.main()

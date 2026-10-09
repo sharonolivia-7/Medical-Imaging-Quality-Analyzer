@@ -7,6 +7,58 @@ import pydicom
 from pydicom.errors import InvalidDicomError
 import numpy as np
 
+_POTENTIALLY_SENSITIVE_KEYWORDS = {
+    "AccessionNumber",
+    "AdmittingDiagnosesDescription",
+    "DeviceSerialNumber",
+    "InstitutionAddress",
+    "InstitutionName",
+    "InstitutionalDepartmentName",
+    "IssuerOfPatientID",
+    "MedicalRecordLocator",
+    "OperatorsName",
+    "OtherPatientIDs",
+    "OtherPatientNames",
+    "PatientAddress",
+    "PatientBirthDate",
+    "PatientBirthTime",
+    "PatientID",
+    "PatientName",
+    "PatientSex",
+    "PatientTelephoneNumbers",
+    "PerformingPhysicianName",
+    "PhysiciansOfRecord",
+    "ProtocolName",
+    "ReferringPhysicianName",
+    "RequestingPhysician",
+    "ScheduledPerformingPhysicianName",
+    "SeriesDescription",
+    "SeriesInstanceUID",
+    "SOPInstanceUID",
+    "StudyDescription",
+    "StudyID",
+    "StudyInstanceUID",
+}
+
+
+def _privacy_check(dataset: pydicom.Dataset) -> dict[str, Any]:
+    """Flag likely identifiers by field name only; never read their values."""
+    sensitive_fields = sorted(
+        {
+            element.keyword
+            for element in dataset.iterall()
+            if element.keyword in _POTENTIALLY_SENSITIVE_KEYWORDS
+        }
+    )
+    private_tags_present = any(element.tag.is_private for element in dataset.iterall())
+    return {
+        "potentially_sensitive_fields": sensitive_fields,
+        "private_tags_present": private_tags_present,
+        "potentially_sensitive_metadata_present": bool(
+            sensitive_fields or private_tags_present
+        ),
+    }
+
 
 def _read_dataset(dicom_path: str | Path) -> pydicom.Dataset:
     """Read a DICOM dataset and convert common file errors to a clear message."""
@@ -32,6 +84,7 @@ def read_dicom_info(dicom_path: str | Path) -> dict[str, Any]:
         "modality": str(dataset.Modality) if "Modality" in dataset else None,
         "pixel_spacing": None,
         "pixel_data_present": "PixelData" in dataset,
+        "privacy_check": _privacy_check(dataset),
     }
 
     if "PixelSpacing" in dataset:
@@ -56,7 +109,25 @@ def read_dicom_image(dicom_path: str | Path) -> dict[str, Any]:
     if "PixelData" not in dataset:
         raise ValueError(f"DICOM file '{dicom_path}' does not contain pixel data.")
 
-    samples_per_pixel = int(dataset.get("SamplesPerPixel", 1))
+    try:
+        rows = int(dataset.Rows)
+        columns = int(dataset.Columns)
+        samples_per_pixel = int(dataset.get("SamplesPerPixel", 1))
+        frame_count = int(dataset.get("NumberOfFrames", 1))
+    except (AttributeError, TypeError, ValueError, OverflowError) as error:
+        raise ValueError(
+            f"DICOM file '{dicom_path}' has missing or invalid image dimensions."
+        ) from error
+
+    if rows < 1 or columns < 1:
+        raise ValueError(
+            f"DICOM file '{dicom_path}' has invalid image dimensions "
+            f"({rows} rows, {columns} columns)."
+        )
+    if frame_count != 1:
+        raise ValueError(
+            f"DICOM file '{dicom_path}' must contain a single 2D grayscale frame."
+        )
     if samples_per_pixel != 1:
         raise ValueError(
             f"DICOM file '{dicom_path}' is not a single-channel grayscale image."
@@ -71,7 +142,16 @@ def read_dicom_image(dicom_path: str | Path) -> dict[str, Any]:
 
     try:
         stored_pixels = dataset.pixel_array
-    except (AttributeError, NotImplementedError, OSError, RuntimeError, ValueError) as error:
+    except (
+        AttributeError,
+        ImportError,
+        IndexError,
+        NotImplementedError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as error:
         raise ValueError(
             f"Could not decode pixel data in DICOM file '{dicom_path}': {error}"
         ) from error
@@ -101,10 +181,7 @@ def read_dicom_image(dicom_path: str | Path) -> dict[str, Any]:
             f"DICOM file '{dicom_path}' has invalid rescale slope or intercept."
         )
 
-    expected_shape = (
-        int(dataset.Rows) if "Rows" in dataset else stored_pixels.shape[0],
-        int(dataset.Columns) if "Columns" in dataset else stored_pixels.shape[1],
-    )
+    expected_shape = (rows, columns)
     if stored_pixels.shape != expected_shape:
         raise ValueError(
             f"DICOM file '{dicom_path}' pixel dimensions do not match its metadata."
@@ -112,12 +189,18 @@ def read_dicom_image(dicom_path: str | Path) -> dict[str, Any]:
 
     # Keep the decoded stored values intact and rescale a separate float array.
     rescaled_pixels = stored_pixels.astype(np.float64) * slope + intercept
+    if not np.isfinite(rescaled_pixels).all():
+        raise ValueError(
+            f"DICOM file '{dicom_path}' produced non-finite rescaled pixel values."
+        )
 
     safe_metadata: dict[str, Any] = {
-        "height": int(dataset.Rows) if "Rows" in dataset else rescaled_pixels.shape[0],
-        "width": int(dataset.Columns) if "Columns" in dataset else rescaled_pixels.shape[1],
+        "height": rows,
+        "width": columns,
         "modality": str(dataset.Modality) if "Modality" in dataset else None,
+        "photometric_interpretation": photometric_interpretation,
         "pixel_spacing": None,
+        "privacy_check": _privacy_check(dataset),
     }
     if "PixelSpacing" in dataset:
         safe_metadata["pixel_spacing"] = [

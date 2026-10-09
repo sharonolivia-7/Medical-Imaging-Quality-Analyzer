@@ -18,6 +18,10 @@ from medical_imaging_quality_analyzer.dicom_reader import (
 
 
 class ReadDicomInfoTests(unittest.TestCase):
+    sample_dicom_path = (
+        Path(__file__).resolve().parents[1] / "data" / "sample" / "CT_small.dcm"
+    )
+
     def create_sample_dicom(
         self,
         path: Path,
@@ -50,6 +54,8 @@ class ReadDicomInfoTests(unittest.TestCase):
         # Synthetic values only, used to confirm private fields are never returned.
         dataset.PatientName = "SAMPLE^PATIENT"
         dataset.PatientID = "SAMPLE-ID-001"
+        dataset.add_new((0x0011, 0x0010), "LO", "SYNTHETIC_TEST")
+        dataset.add_new((0x0011, 0x1010), "LO", "SYNTHETIC_PRIVATE_VALUE")
 
         if include_pixel_data:
             dataset.SamplesPerPixel = samples_per_pixel
@@ -78,10 +84,18 @@ class ReadDicomInfoTests(unittest.TestCase):
         self.assertEqual(result["modality"], "OT")
         self.assertEqual(result["pixel_spacing"], [0.5, 0.75])
         self.assertTrue(result["pixel_data_present"])
-        self.assertNotIn("PatientName", result)
-        self.assertNotIn("PatientID", result)
+        self.assertIn(
+            "PatientName",
+            result["privacy_check"]["potentially_sensitive_fields"],
+        )
+        self.assertIn(
+            "PatientID",
+            result["privacy_check"]["potentially_sensitive_fields"],
+        )
+        self.assertTrue(result["privacy_check"]["private_tags_present"])
         self.assertNotIn("SAMPLE^PATIENT", str(result))
         self.assertNotIn("SAMPLE-ID-001", str(result))
+        self.assertNotIn("SYNTHETIC_PRIVATE_VALUE", str(result))
 
     def test_reports_missing_pixel_data_without_decoding_pixels(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -127,10 +141,15 @@ class ReadDicomInfoTests(unittest.TestCase):
         self.assertEqual(result["height"], 2)
         self.assertEqual(result["width"], 3)
         self.assertEqual(result["modality"], "OT")
+        self.assertEqual(result["photometric_interpretation"], "MONOCHROME2")
         self.assertNotIn("PatientName", result)
         self.assertNotIn("PatientID", result)
         self.assertNotIn("SAMPLE^PATIENT", str(result))
         self.assertNotIn("SAMPLE-ID-001", str(result))
+        self.assertIn(
+            "PatientName",
+            result["privacy_check"]["potentially_sensitive_fields"],
+        )
 
     def test_decodes_grayscale_pixels_when_no_rescale_values_exist(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -189,6 +208,37 @@ class ReadDicomInfoTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "invalid rescale slope or intercept"):
                 read_dicom_image(dicom_path)
+
+    def test_pydicom_sample_metadata_is_read_without_values(self):
+        if not self.sample_dicom_path.is_file():
+            self.skipTest("The optional CT_small.dcm sample is not present.")
+
+        result = read_dicom_info(self.sample_dicom_path)
+
+        self.assertEqual(result["height"], 128)
+        self.assertEqual(result["width"], 128)
+        self.assertTrue(result["pixel_data_present"])
+        self.assertTrue(
+            result["privacy_check"]["potentially_sensitive_metadata_present"]
+        )
+        self.assertIn(
+            "PatientName",
+            result["privacy_check"]["potentially_sensitive_fields"],
+        )
+        self.assertNotIn("PatientName", result)
+        self.assertNotIn("PatientID", result)
+
+    def test_pydicom_sample_pixel_array_loads_as_finite_grayscale(self):
+        if not self.sample_dicom_path.is_file():
+            self.skipTest("The optional CT_small.dcm sample is not present.")
+
+        result = read_dicom_image(self.sample_dicom_path)
+
+        self.assertEqual(result["image"].shape, (128, 128))
+        self.assertTrue(np.isfinite(result["image"]).all())
+        self.assertTrue(result["privacy_check"]["private_tags_present"])
+        self.assertNotIn("PatientName", result)
+        self.assertNotIn("PatientID", result)
 
 
 if __name__ == "__main__":

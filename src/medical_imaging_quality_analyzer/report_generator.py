@@ -12,6 +12,7 @@ _KNOWN_CHECKS = (
     "pixel_variation",
     "mean_intensity",
     "standard_deviation",
+    "dicom_privacy",
 )
 
 
@@ -70,6 +71,23 @@ def generate_report(
     snr = image_statistics.get("estimated_snr")
     if snr is None:
         snr = image_statistics.get("snr")
+    mean_intensity = get_measurement("mean_intensity")
+    if snr is None and isinstance(mean_intensity, (int, float)) and mean_intensity <= 0:
+        snr_display = "Not available (mean intensity is non-positive)"
+    else:
+        snr_display = _format_measurement(snr)
+
+    frequency_shape = image_statistics.get("frequency_spectrum_shape")
+    if (
+        isinstance(frequency_shape, (list, tuple))
+        and len(frequency_shape) == 2
+        and all(isinstance(dimension, int) for dimension in frequency_shape)
+    ):
+        frequency_summary = (
+            f"Calculated ({frequency_shape[1]} x {frequency_shape[0]} bins)"
+        )
+    else:
+        frequency_summary = "Not calculated"
 
     checks = quality_control_results.get("checks")
     if not isinstance(checks, Mapping):
@@ -102,7 +120,8 @@ def generate_report(
         f"Mean intensity: {_format_measurement(get_measurement('mean_intensity'))}\n"
         "Standard deviation: "
         f"{_format_measurement(get_measurement('standard_deviation'))}\n"
-        f"Estimated SNR: {_format_measurement(snr)}\n"
+        f"Estimated SNR: {snr_display}\n"
+        f"Frequency spectrum: {frequency_summary}\n"
         "Quality-control status: "
         f"{_format_measurement(quality_control_results.get('overall_status'))}\n\n"
         "Quality warnings\n"
